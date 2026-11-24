@@ -1,0 +1,134 @@
+name: gateway-publish
+
+x-app-env: &app-env
+  CONFIG_PATH: /data/routes.json
+  BACKEND_CATALOG: '{"sample-a":"http://sample-a:9000","sample-b":"http://sample-b:9000"}'
+  BACKEND_LABELS: '{"sample-a":"样例服务 A","sample-b":"样例服务 B"}'
+  LOG_LEVEL: INFO
+
+services:
+  config-init:
+    build: .
+    image: gateway-publish:latest
+    user: "0:0"
+    command: ["python", "-m", "common.seed"]
+    environment:
+      <<: *app-env
+      DATA_UID: "10001"
+      DATA_GID: "10001"
+    volumes:
+      - gateway-config:/data
+    restart: "no"
+
+  gateway:
+    build: .
+    image: gateway-publish:latest
+    user: "10001:10001"
+    command:
+      - gunicorn
+      - --workers=2
+      - --threads=8
+      - --timeout=180
+      - --graceful-timeout=30
+      - --access-logfile=-
+      - --bind=0.0.0.0:8000
+      - gateway.app:app
+    environment:
+      <<: *app-env
+      UPSTREAM_CONNECT_TIMEOUT: "3"
+      UPSTREAM_READ_TIMEOUT: "150"
+    ports:
+      - "8080:8000"
+    volumes:
+      - gateway-config:/data:ro
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "common.healthcheck", "http://127.0.0.1:8000/__gateway/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  publisher:
+    build: .
+    image: gateway-publish:latest
+    user: "10001:10001"
+    command:
+      - gunicorn
+      - --workers=1
+      - --threads=8
+      - --timeout=200
+      - --bind=0.0.0.0:8000
+      - publisher.app:app
+    environment:
+      <<: *app-env
+      GATEWAY_URL: http://gateway:8000
+      PROBE_TIMEOUT: "180"
+    ports:
+      - "8081:8000"
+    volumes:
+      - gateway-config:/data
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "common.healthcheck", "http://127.0.0.1:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  sample-a:
+    build: .
+    image: gateway-publish:latest
+    user: "10001:10001"
+    command:
+      - gunicorn
+      - --workers=2
+      - --threads=8
+      - --timeout=180
+      - --bind=0.0.0.0:9000
+      - samples.app:app
+    environment:
+      SERVICE_NAME: sample-a
+      SERVICE_COLOR: blue
+    ports:
+      - "9001:9000"
+    healthcheck:
+      test: ["CMD", "python", "-m", "common.healthcheck", "http://127.0.0.1:9000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+    restart: unless-stopped
+
+  sample-b:
+    build: .
+    image: gateway-publish:latest
+    user: "10001:10001"
+    command:
+      - gunicorn
+      - --workers=2
+      - --threads=8
+      - --timeout=180
+      - --bind=0.0.0.0:9000
+      - samples.app:app
+    environment:
+      SERVICE_NAME: sample-b
+      SERVICE_COLOR: green
+    ports:
+      - "9002:9000"
+    healthcheck:
+      test: ["CMD", "python", "-m", "common.healthcheck", "http://127.0.0.1:9000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+    restart: unless-stopped
+
+volumes:
+  gateway-config:
